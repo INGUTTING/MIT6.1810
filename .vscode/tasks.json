@@ -1,0 +1,22 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build xv6",
+            "type": "shell",
+            "command": "make",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "qemu xv6 (GDB wait)",
+            "type": "shell",
+            "command": "make qemu-nox-gdb",
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}

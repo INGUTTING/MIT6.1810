@@ -299,6 +299,9 @@ kfork(void)
   np->state = RUNNABLE;
   release(&np->lock);
 
+  // make the child mask equal to its parent mask
+  np->mask = p->mask;
+
   return pid;
 }
 
