@@ -1,0 +1,7 @@
+the r_sstatus
+7
+the p->trapframe->a7 represents the syscall number 
+supervisor mode
+lw a3, 0(zero)
+a3
+for the address 0 is not mapped to the kernel memory space

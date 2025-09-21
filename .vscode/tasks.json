@@ -1,0 +1,28 @@
+// // .vscode/tasks.json
+// {
+//   "version": "2.0.0",
+//   "tasks": [
+//     {
+//       "label": "Start xv6 on QEMU for GDB", // <-- 这个名字
+//       "type": "shell",
+//       "command": "make qemu-gdb GDBPORT=26000",
+//       "isBackground": true,
+//       "problemMatcher": {
+//         "owner": "custom",
+//         "pattern": {
+//           "regexp": "^\\*\\*\\* Now run 'gdb' in another window\\.$"
+//         },
+//         "background": {
+//           "activeOnStart": true,
+//           "beginsPattern": ".",
+//           "endsPattern": "^\\*\\*\\* Now run 'gdb' in another window\\.$"
+//         }
+//       },
+//       "presentation": {
+//         "reveal": "always",
+//         "panel": "new",
+//         "clear": true
+//       }
+//     }
+//   ]
+// }
