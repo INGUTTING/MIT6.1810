@@ -1,0 +1,22 @@
+PTE Binary and Permissions Mapping
+
+0x5B  = 0101 1011 : valid, read, not writable, executable, user-accessible (RXU)
+0x17  = 0001 0111 : valid, read, write, not executable, user-accessible (RWU)
+0x07  = 0000 0111 : valid, read, write, not executable, not user-accessible (RW)
+0xD7  = 1101 0111 : valid, read, write, not executable, user-accessible (RWU)
+0x00  = 0000 0000 : no permissions
+0xC7  = 1100 0111 : valid, read, write, not executable, not user-accessible
+0x4B  = 0100 1011 : valid, read, not writable, executable, not user-accessible
+
+Logical Mapping of Contents:
+
+1. First entry        : user process text page
+2. Second entry       : user process data
+3. Third entry        : user process data
+4. Fourth entry       : guard page
+5. Fifth entry        : user stack
+6–10. Sixth to tenth  : unused, unmapped
+11–20. Eleventh to twentieth : first 8 unused, last 2
+Second-to-last entry : trapframe (RW)
+Last entry            : trampoline (RX)
+Final two entries     : not executable by user
