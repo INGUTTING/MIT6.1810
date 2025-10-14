@@ -104,4 +104,13 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  int alarm_interval;                // the alarm interval
+  void (*handler_pointer)(void);     // handler function pointer
+
+  int passed;                        // the ticks have passed since last call
+  //int origin_epc;                    // used to save the original address entering kernel , avoid infinite loop
+  int alarm_on;                      // used to judge whether the alarm is on, avoid call again
+  struct trapframe origin_trapframe;
+  int alarm_returned;
 };

@@ -140,6 +140,7 @@ panic(char *s)
   printf("panic: ");
   printf("%s\n", s);
   panicked = 1; // freeze uart output from other CPUs
+  backtrace();
   for(;;)
     ;
 }
@@ -148,4 +149,39 @@ void
 printfinit(void)
 {
   initlock(&pr.lock, "pr");
+}
+
+void 
+backtrace(void)
+{
+  printf("backtrace: \n");
+  // read the value of s0 / fp through r_fp()
+  uint64 fp = r_fp();
+  uint64 ra = *(uint64 *)(fp - 8);
+  printf("%p\n", (void*)ra);
+  // fpPage represents the aligned virtual address
+  // for the kernel page is aligned page,so directly use it is ok
+  // uint64 fpPage = PGROUNDDOWN(fp);
+
+  // how to use fp to through the stack and printf the return address?
+  // how to printf return address?
+  // is it alright to printf the addr of *(s0 - 8) ?
+  // but actually it printf the virtual addr 
+
+  // how to indetify the last stackframe?
+  // my thought is: when the page is not mapping means its next one is the last
+  // the kernel pagetable is defined in vm.c
+  while(fp !=0 && fp >= KERNBASE){
+    // update the return value and fp
+    uint64 nextfp = *(uint64 *)(fp - 16);
+    if(nextfp < KERNBASE)
+      break;
+    ra = *(uint64 *)(nextfp - 8);
+    if(PGROUNDDOWN(ra) < MAXVA - PGSIZE)
+      printf("%p\n", (void*)ra);
+    fp = nextfp;
+    // fpPage = PGROUNDDOWN(fp);
+    // if(walkaddr(kernel_pagetable,fpPage) == 0)
+
+  }
 }

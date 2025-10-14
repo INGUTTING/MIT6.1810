@@ -81,9 +81,37 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    // 如果是时钟中断则进入
+    if(p->alarm_interval > 0){
+      if(p->alarm_on > 0){
+        // acquire(&tickslock);
+        p->passed += 1;
+        // 如果整除 
+        if(p->passed >= p->alarm_interval && p->alarm_returned != 0){
+          // 调用相应处理函数
+          // p->trapframe->epc = (uint64)p->handler_pointer;
+          memmove(&p->origin_trapframe, p->trapframe, sizeof(struct trapframe));
+          p->trapframe->epc = (uint64)p->handler_pointer;
+          p->alarm_on = 1;
+          // 设置此时不能同时 alarm
+          p->alarm_returned = 0;
+          p->passed = 0;
+        }
+      }
+      
+    }
+    // else if(p->alarm_interval == 0){
+    //   // 如果 interval == 0 则表明关闭 alarm
+    //   // acquire(&tickslock);
+    //   *p->trapframe = p->origin_trapframe;
+    //   p->passed = 0;
+    //   p->alarm_on = 0;
+    // }
+    // release(&tickslock);
     yield();
-
+  }
+  
   prepare_return();
 
   // the user page table to switch to, for trampoline.S

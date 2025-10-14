@@ -1,0 +1,6 @@
+a2 for li	a2,13
+0000000000000000 <g>; 000000000000000e <f>;
+00000000000006f6 <printf>
+0x34 ,namely ra = 0x34
+He110 World
+For we don't pass the second segment,so the value in a2 is random or keep the remain from last called function

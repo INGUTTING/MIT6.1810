@@ -80,6 +80,7 @@ sys_pause(void)
     }
     sleep(&ticks, &tickslock);
   }
+  backtrace();
   release(&tickslock);
   return 0;
 }
@@ -104,4 +105,58 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+
+uint64
+sys_sigalarm(void)
+{
+  // 保存 alarm 间隔
+  // 保存函数指针
+  struct proc *p = myproc();
+  // 解析参数
+  int interval;
+  uint64 handler;
+  argint(0,&interval);
+  argaddr(1,&handler);
+  acquire(&tickslock);
+  p->alarm_interval = interval;
+  p->handler_pointer = (void(*)())handler;
+  // p->origin_trapframe = *(p->trapframe);
+  // memmove(&p->origin_trapframe, p->trapframe, sizeof(struct trapframe));
+  if(interval != 0){
+    p->alarm_on = 1;
+    p->alarm_returned = 1;
+  }
+  else if(interval == 0){
+    p->alarm_on = 0;
+    p->alarm_returned = 0;
+  }
+  // printf("%ld",p->trapframe->a0);
+  // printf("%d",p->alarm_on);
+  // printf("%d",p->alarm_returned);
+  release(&tickslock);
+
+  return 0;
+}
+
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  uint64 a0;
+  acquire(&tickslock);
+  // a0 = p->trapframe->a0;
+  // *p->trapframe = p->origin_trapframe;
+  memmove(p->trapframe, &p->origin_trapframe, sizeof(struct trapframe));
+  a0 = p->trapframe->a0;
+  // p->alarm_on = 0;
+  p->alarm_returned = 1;
+  // 打印查看值
+  // printf("%ld",a0);
+  // printf("%d",p->alarm_on);
+  // printf("%d",p->alarm_returned);
+  release(&tickslock);
+  return a0;
 }
