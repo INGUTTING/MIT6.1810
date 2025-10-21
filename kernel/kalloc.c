@@ -9,6 +9,15 @@
 #include "riscv.h"
 #include "defs.h"
 
+#define KPAstart (PGROUNDUP((uint64)end))
+#define KPAend ((uint64)PHYSTOP)
+#define MaxPG  (PHYSTOP - KERNBASE) / PGSIZE
+#define NPG  ((uint64)(KPAend - KPAstart) / (uint64)PGSIZE);
+static uint64 free_memory = 0;
+
+uint64 refer_count[MaxPG];
+struct spinlock ref_lock;
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -27,6 +36,9 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&ref_lock, "ref_lock");
+  free_memory = NPG;
+  memset(refer_count, 0, sizeof(refer_count));
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -46,18 +58,87 @@ freerange(void *pa_start, void *pa_end)
 void
 kfree(void *pa)
 {
+  // struct run *r;
+
+  // if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+  //   panic("kfree");
+
+  // // Fill with junk to catch dangling refs.
+
+  // uint64 PGindex = ((uint64)pa - KPAstart) / PGSIZE ;
+  // uint64 count = refer_count[PGindex];
+  // if(count == 0){
+  //   memset(pa, 1, PGSIZE);
+  //   r = (struct run*)pa;
+
+  //   acquire(&kmem.lock);
+  //   r->next = kmem.freelist;
+  //   free_memory++;
+  //   kmem.freelist = r;
+
+  //   release(&kmem.lock);
+  // }
+  // else if(count == 1){
+  //   refer_count[PGindex] = 0;
+  //   memset(pa, 1, PGSIZE);
+  //   r = (struct run*)pa;
+
+  //   acquire(&kmem.lock);
+  //   r->next = kmem.freelist;
+  //   kmem.freelist = r;
+  //   free_memory++;
+  //   //printf("%ld",free_memory);
+  //   release(&kmem.lock);
+  // }
+  // else if(count > 1){
+  //   acquire(&ref_lock);
+  //   refer_count[PGindex]--;
+  //   release(&ref_lock);
+  // }
   struct run *r;
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
   // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
 
+  uint64 PGindex = ((uint64)pa - KPAstart) / PGSIZE ;
+  //uint64 count = refer_count[PGindex];
+
+  // if(count <= 1){
+  //   memset(pa, 1, PGSIZE);
+
+  //   r = (struct run*)pa;
+
+  
+
+  //   acquire(&kmem.lock);
+  //   r->next = kmem.freelist;
+  //   kmem.freelist = r;
+  //   release(&kmem.lock);
+  // }
+  // else if( count > 1){
+  //   refer_count[PGindex]--;
+  // }
+  // 递减引用计数
+  acquire(&ref_lock);
+
+  if(refer_count[PGindex] > 0){
+    refer_count[PGindex]--;
+    if(refer_count[PGindex] > 0){
+      release(&ref_lock);
+      return;
+    }
+  }
+  release(&ref_lock);
+
+  // 将页放回freelist中
+  memset(pa, 1, PGSIZE);
   r = (struct run*)pa;
 
   acquire(&kmem.lock);
   r->next = kmem.freelist;
+  free_memory++;
   kmem.freelist = r;
   release(&kmem.lock);
 }
@@ -69,13 +150,22 @@ void *
 kalloc(void)
 {
   struct run *r;
+  uint64 rPA,index;
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r){
     kmem.freelist = r->next;
+    free_memory--;
+    //printf("%ld",free_memory);
+    rPA = (uint64)r;
+    index = (rPA - KPAstart) / PGSIZE;
+    acquire(&ref_lock);
+    refer_count[index]++;
+    release(&ref_lock);
+  }
   release(&kmem.lock);
-
+  
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;

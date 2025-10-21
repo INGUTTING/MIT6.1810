@@ -17,6 +17,10 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+extern char end[];
+extern uint64 refer_count[]; // kalloc.c defines
+extern struct spinlock ref_lock;
+
 // Make a direct-map page table for the kernel.
 pagetable_t
 kvmmake(void)
@@ -299,28 +303,44 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  //char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       continue;   // page table entry hasn't been allocated
     if((*pte & PTE_V) == 0)
       continue;   // physical page hasn't been allocated
+    // father pagetable 
     pa = PTE2PA(*pte);
+    
+    *pte &= ~PTE_W;
+    *pte |= PTE_COW;
+    uint64 index = (pa - PGROUNDUP((uint64)end)) / PGSIZE;
+    // 找到对应引用并使其引用数增加 1
+
+    acquire(&ref_lock);
+    refer_count[index]++;
+    release(&ref_lock);
+
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+    if(mappages(new,i,PGSIZE, pa, flags) != 0){
+      // kfree((void*)pa);
+
+      uvmunmap(new, 0, i / PGSIZE, 1);
+      return -1;
     }
+
+
+    // 修改使得仅仅复制 PTE 过去，所以这行分配的要修改
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    // if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+    //   kfree(mem);
+    //   goto err;
+    // }
   }
   return 0;
-
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
 }
 
 // mark a PTE invalid for user access.
@@ -352,12 +372,34 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0) {
-      if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
+      // 没有映射,所以此时保留合理
+      if(vmfault(pagetable, va0, 0) == 0) {
+        printf("copyout first wrong!");
         return -1;
       }
+      pa0 = walkaddr(pagetable, va0);
+      if(pa0 == 0)
+        return -1;
     }
 
     pte = walk(pagetable, va0, 0);
+    if(pte == 0)
+      return -1;
+    if((*pte & PTE_W) == 0 && (*pte & PTE_COW) == 0)
+      return -1;
+
+    if((*pte & PTE_COW) != 0){
+      //("copyout is COWing!");
+      if(vmfault(pagetable, va0, 0) == 0){
+        printf("vmfault failed! in copyout");
+        return -1;
+      }
+      
+      pa0 = walkaddr(pagetable, va0);
+      pte = walk(pagetable, va0,0);
+      if(pa0 == 0 || pte == 0)
+        return -1;
+    }
     // forbid copyout over read-only user text pages.
     if((*pte & PTE_W) == 0)
       return -1;
@@ -449,27 +491,144 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 // that was lazily allocated in sys_sbrk().
 // returns 0 if va is invalid or already mapped, or if
 // out of physical memory, and physical address if successful.
+
 uint64
 vmfault(pagetable_t pagetable, uint64 va, int read)
 {
+  // uint64 mem;
+  // struct proc *p = myproc();
+  
+  // if (va >= p->sz)
+  //   return 0;
+  // va = PGROUNDDOWN(va);
+  // // if(ismapped(pagetable, va)) {
+  // //   return 0;
+  // // }
+  // pte_t *PTEv = walk(pagetable, va, 0);
+  // if(*PTEv == 0 || (PTE_FLAGS(*PTEv) & ~PTE_V) == 0 )
+  //   return 0;
+  
+  // uint64 pa = walkaddr(pagetable, va);
+  // uint64 indexpa = (pa - PGROUNDUP((uint64)end)) / PGSIZE;
+  // uint64 perm = PTE_FLAGS(*PTEv);
+
+
+  // if(read == 0 && (perm & PTE_COW) != 0 ){
+  //   if(refer_count[indexpa] == 1){
+  //     *PTEv = PA2PTE(pa) | ((perm | PTE_W) & ~PTE_COW);
+  //     sfence_vma();
+  //     return 1;
+  //   }
+  //   mem = (uint64) kalloc();
+  //   uint64 indexmem = (mem - PGROUNDUP((uint64)end)) / PGSIZE;
+  //   if(mem == 0){
+  //     acquire(&p->lock);
+  //     p->killed = 1;
+  //     release(&p->lock);
+  //     return 0;
+  //   }
+  //   memmove((void*)mem, (void*)pa, PGSIZE);
+  //   // va 重新映射页
+  //   uvmunmap(pagetable, va, 1, 0);
+
+  //   int suc = mappages(pagetable, va, PGSIZE, mem, PTE_W | perm);
+  //   if(suc == 0){
+  //     acquire(&ref_lock);
+  //     refer_count[indexpa]--;
+  //     if(refer_count[indexpa] <= 1){
+  //       *PTEv &= ~PTE_COW;
+  //     }
+  //     refer_count[indexmem]++;
+  //     release(&ref_lock);
+  //   }
+  //   else if(suc != 0){
+  //     // kfree 里有 引用计数自减
+  //     kfree((void*)mem);
+  //     return 0;
+  //   }
+  //   sfence_vma();
+  //   return mem;
+  // }
+  // else if((perm & PTE_W) == 0  && refer_count[indexpa] == 1 && (perm & PTE_COW) == 0) {
+  //   printf("illegal write!");
+  //   p->killed = 1;
+  //   return 0;
+  // }
+  // return 0;
   uint64 mem;
   struct proc *p = myproc();
+  pte_t *PTEv;
+  uint64 pa, perm;
+  uint64 indexpa;
 
-  if (va >= p->sz)
+  if(va >= p->sz)
     return 0;
   va = PGROUNDDOWN(va);
-  if(ismapped(pagetable, va)) {
+
+  // 查找 PTE 
+  PTEv = walk(pagetable, va, 0);
+  if(PTEv == 0 || (*PTEv & PTE_V) == 0){
+    // 即 Lazy allocation
+    mem = (uint64) kalloc();
+    if(mem == 0)
+      return 0;
+    memset((void*)mem, 0 ,PGSIZE);
+    if(mappages(pagetable, va, PGSIZE, mem , PTE_W | PTE_R |PTE_U | PTE_V) != 0){
+      kfree((void*)mem);
+      return 0;
+    }
+    return mem;
+  }
+
+  pa = PTE2PA(*PTEv);
+  if(pa == 0)
+    return 0;
+  perm = PTE_FLAGS(*PTEv);
+  indexpa = (pa - PGROUNDUP((uint64)end)) / PGSIZE;
+
+  // 处理 COW 
+  if(read == 0 && (perm & PTE_COW) != 0){
+    // 分配页
+    uint64 count = refer_count[indexpa];
+
+    if(count == 1){
+      *PTEv = PA2PTE(pa) | ((perm | PTE_W) & ~PTE_COW);
+      sfence_vma();
+      return 1;
+    }
+    mem = (uint64) kalloc();
+    if(mem == 0){
+      acquire(&p->lock);
+      p->killed = 1;
+      release(&p->lock);
+      return 0;
+    }
+
+    // 复制内容
+    memmove((void*)mem, (void*)pa, PGSIZE);
+
+    // 更新旧页表的引用计数
+    acquire(&ref_lock);
+    refer_count[indexpa]--;
+    release(&ref_lock);
+    if(refer_count[indexpa] == 0)
+      kfree((void*)pa);
+
+    // 直接修改 原来的 PTE
+    *PTEv = PA2PTE(mem) | (perm & ~PTE_COW) | PTE_W | PTE_V;
+
+    sfence_vma();
+    return mem;
+
+  }
+  if(read == 0 && (perm & PTE_W) == 0 && (perm & PTE_COW) == 0){
+    printf("vmfault :illegal write");
+    acquire(&p->lock);
+    p->killed = 1;
+    release(&p->lock);
     return 0;
   }
-  mem = (uint64) kalloc();
-  if(mem == 0)
-    return 0;
-  memset((void *) mem, 0, PGSIZE);
-  if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
-    kfree((void *)mem);
-    return 0;
-  }
-  return mem;
+  return 0;
 }
 
 int
