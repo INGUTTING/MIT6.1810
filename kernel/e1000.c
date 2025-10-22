@@ -104,8 +104,57 @@ e1000_transmit(char *buf, int len)
   // return -1 on failure (e.g., there is no descriptor available)
   // so that the caller knows to free buf.
   //
+  //printf("e1000_transmit!");
+  acquire(&e1000_lock);
+  // 下一个 packet 的 TX 环 索引
+  uint32 head = regs[E1000_TDH];
+  uint32 tail = regs[E1000_TDT];
+  uint32 next = (tail + 1) % TX_RING_SIZE;
+  // 检查是否环溢出 / 环已满
+  if(next == head){
+    release(&e1000_lock);
+    printf("TXring is overflowing");
+    return -1;
+  }
+  // 在 TX 中放置指针指向 descriptor 中的 包
+  // addr  ->  buf
+  struct tx_desc *descriptor_now = &tx_ring[tail];
 
+  // 更改相应的 bit
+  // 这里遇到的问题是怎么把 E1000 中寄存器的地址转换为对结构体中的内容的操作
+
+  // 说明之前的传输请求未完成，返回错误
+  if(!(descriptor_now->status & E1000_TXD_STAT_DD)){
+    release(&e1000_lock);
+    return -1;
+  }
+  // 否则则将上次发送的 buf free掉
+  if(descriptor_now->addr)
+    kfree((void*)descriptor_now->addr);
   
+  descriptor_now->addr = (uint64)buf;
+  descriptor_now->length = len;
+  // descriptor_now->status = 0; 
+  descriptor_now->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  // int index = (E1000_TDT - E1000_TDBAL) / sizeof(struct tx_desc);
+  // regs[E1000_TDT] = &(tx_ring[(tail + 1) % TX_RING_SIZE]);
+  printf("TX: tail=%d head=%d next=%d status=%x addr=%p\n", 
+       regs[E1000_TDT], head, next, descriptor_now->status, (void*)descriptor_now->addr);
+
+  regs[E1000_TDT] = next;
+  printf("TX: tail=%d head=%d next=%d status=%x addr=%p\n", 
+       regs[E1000_TDT], head, (regs[E1000_TDT] + 1) % RX_RING_SIZE, descriptor_now->status, (void*)descriptor_now->addr);
+
+  // __sync_synchronize();
+
+  // 现在这里暂时不支持多个包，等之后修改?or not need to support multiple packets
+
+  // 在每个 buffer 传输完成包后，将该 buffer 释放
+  if(!(descriptor_now->status & E1000_TXD_STAT_DD)){
+    descriptor_now->addr = 0;
+  }
+
+  release(&e1000_lock);
   return 0;
 }
 
@@ -118,6 +167,53 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver a buf for each packet (using net_rx()).
   //
+  //printf("e1000_recv!");
+
+  // 在 RX 环中找到要接收的 包
+  // 要接收的包的标志：DD 与 EOP  DD 表示数据已经写入缓冲区中，EOP 表示是接受包的最后一块
+  // 若 E1000 中有没有挂起的中断，则请求PLIC 在中断启用时立即发送中断信号
+  
+  // 首先读取 E1000_RDT 的值 + 1 取模 询问下一个索引位置
+  int count = 0;
+  uint32 next;
+
+
+  // 应该写一个 while 循环查看 EOP bit 是否为真，若否则循环 索引? 其实直接丢弃掉超过 size 的 包了，无需访问
+  // 但是一次中断的多个包又该怎么处理呢？：查看 DD 是否置位 
+  while(count < RX_RING_SIZE){
+    // if(count >= RX_RING_SIZE){
+    //   release(&e1000_lock);
+    //   break;
+    // }
+    next = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+    struct rx_desc * descriptor_now = &rx_ring[next];
+
+    // 查看描述符 status 中是否有 DD bit, 如果没有则就是没有包到达，以此处理中断
+    if(!(descriptor_now->status & E1000_RXD_STAT_DD)){
+      break;
+    }
+    // 调用 net_rx() 将 包buffer 数据包缓存区传递到网络栈
+    // net_rx(char* buf, int len)
+    net_rx((void*)(descriptor_now->addr), descriptor_now->length);
+
+
+    // 使用 kalloc 分配一个1新的缓冲区，用来替代刚刚被替换的那个，并将该 descriptor 的 status bit 清除
+    acquire(&e1000_lock);
+    char * newbuf = kalloc();
+    descriptor_now->addr = (uint64)newbuf;
+    if(!descriptor_now->addr){
+      release(&e1000_lock);
+      panic("e1000_recv");
+    }
+    descriptor_now->status = 0;
+    // descriptor_now->length = 0;
+
+    printf("RX: tail=%d next=%d status=%x addr=%p\n",regs[E1000_RDT], next, descriptor_now->status, (void*)descriptor_now->addr);
+    regs[E1000_RDT] = next;
+    printf("RX: tail=%d next=%d status=%x addr=%p\n",regs[E1000_RDT], (regs[E1000_RDT] + 1) % RX_RING_SIZE, descriptor_now->status, (void*)descriptor_now->addr);
+    release(&e1000_lock);
+    //__sync_synchronize();
+  }
 
 }
 
