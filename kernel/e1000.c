@@ -18,6 +18,7 @@ static volatile uint32 *regs;
 
 struct spinlock e1000_lock;
 
+
 // called by pci_init().
 // xregs is the memory address at which the
 // e1000's registers are mapped.
@@ -138,14 +139,14 @@ e1000_transmit(char *buf, int len)
   descriptor_now->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
   // int index = (E1000_TDT - E1000_TDBAL) / sizeof(struct tx_desc);
   // regs[E1000_TDT] = &(tx_ring[(tail + 1) % TX_RING_SIZE]);
-  printf("TX: tail=%d head=%d next=%d status=%x addr=%p\n", 
-       regs[E1000_TDT], head, next, descriptor_now->status, (void*)descriptor_now->addr);
+  //printf("TX: tail=%d head=%d next=%d status=%x addr=%p\n", 
+  //     regs[E1000_TDT], head, next, descriptor_now->status, (void*)descriptor_now->addr);
 
   regs[E1000_TDT] = next;
-  printf("TX: tail=%d head=%d next=%d status=%x addr=%p\n", 
-       regs[E1000_TDT], head, (regs[E1000_TDT] + 1) % RX_RING_SIZE, descriptor_now->status, (void*)descriptor_now->addr);
+  __sync_synchronize();
+  //printf("TX: tail=%d head=%d next=%d status=%x addr=%p\n", 
+  //   regs[E1000_TDT], head, (regs[E1000_TDT] + 1) % RX_RING_SIZE, descriptor_now->status, (void*)descriptor_now->addr);
 
-  // __sync_synchronize();
 
   // 现在这里暂时不支持多个包，等之后修改?or not need to support multiple packets
 
@@ -208,11 +209,11 @@ e1000_recv(void)
     descriptor_now->status = 0;
     // descriptor_now->length = 0;
 
-    printf("RX: tail=%d next=%d status=%x addr=%p\n",regs[E1000_RDT], next, descriptor_now->status, (void*)descriptor_now->addr);
+    //printf("RX: tail=%d next=%d status=%x addr=%p\n",regs[E1000_RDT], next, descriptor_now->status, (void*)descriptor_now->addr);
     regs[E1000_RDT] = next;
-    printf("RX: tail=%d next=%d status=%x addr=%p\n",regs[E1000_RDT], (regs[E1000_RDT] + 1) % RX_RING_SIZE, descriptor_now->status, (void*)descriptor_now->addr);
+    __sync_synchronize();
+    //printf("RX: tail=%d next=%d status=%x addr=%p\n",regs[E1000_RDT], (regs[E1000_RDT] + 1) % RX_RING_SIZE, descriptor_now->status, (void*)descriptor_now->addr);
     release(&e1000_lock);
-    //__sync_synchronize();
   }
 
 }

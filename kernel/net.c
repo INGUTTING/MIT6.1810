@@ -32,9 +32,10 @@ struct port_queue{
   struct FIFO *FIFOqueue;
   uint64 binded;
   uint64 size;
+  void *chan;
 };
 
-static struct port_queue PortQ[PortNumber];
+struct port_queue PortQ[PortNumber];
 
 void
 netinit(void)
@@ -68,8 +69,6 @@ sys_bind(void)
     return -1;
   // 为端口维护先进先出队列
   // 这个端口号如何被全局访问？
-  // 如果不做成 二维数组？那该怎么安排？
-  // 如果做成 二维数组，那怎么安排端口数量？
   
   // 初始化上述对应结构体
   struct port_queue *portQ = &PortQ[port];
@@ -82,6 +81,10 @@ sys_bind(void)
     
   portQ->binded = 1;
   portQ->size = 0;
+  portQ->chan = &PortQ[port];
+  // portQ->FIFOqueue->next = 0;
+
+  printf("bind port %d ok\n", port);
 
   release(&portQ->portlock);
   return 0;
@@ -160,11 +163,11 @@ sys_recv(void)
   argaddr(3, &bufaddr);
   argint(4, &maxlen);
 
-  if(copyin(p->pagetable, (char*)&sport, sportaddr, sizeof(sport)) < 0)
-    return -1;
+  // if(copyin(p->pagetable, (char*)&sport, sportaddr, sizeof(sport)) < 0)
+  //   return -1;
 
-  if(copyin(p->pagetable, (char*)&src, srcaddr, sizeof(src)) < 0)
-    return -1;
+  // if(copyin(p->pagetable, (char*)&src, srcaddr, sizeof(src)) < 0)
+  //   return -1;
 
 
   // recv()  应该以到达顺序查看到达的包
@@ -182,25 +185,56 @@ sys_recv(void)
   acquire(&deportQ->portlock);
   if(deportQ->binded != 1){
     // 该端口号队列未初始化
-    printf("the port queue isn't initialized");
+    printf("the port queue isn't initialized\n");
     release(&deportQ->portlock);
     return -1;
   }
 
   if(deportQ->size == 0){
-    // 如果没有包则 sleep 在当前进程的 chan 上
-    sleep(deportQ, &deportQ->portlock);
+    // 如果没有包则 sleep 在当前 port chan 上
+    printf("port %d is sleeping for no packet\n", deport);
+    sleep(PortQ[deport].chan, &PortQ[deport].portlock);
   }
   // 怎么恢复比较合理？
   // 当 size >= 1 时恢复
 
-  if(deportQ->size >= 1)
-    deportQ->size -= 1;
+  struct FIFO *FIFOQ = deportQ->FIFOqueue;
+  //struct FIFO *next;
+  // if(deportQ->size == 1){
+  //   deportQ->size = 0;
+  //   // put the FIFO  empty for no packet
+  //   deportQ->FIFOqueue = 0;
+  // }
+  // else if(deportQ->size > 1){
+  //   next = FIFOQ->next;
+  //   deportQ->FIFOqueue = next;
+  // }
+   // if(FIFOQ->next){
+  //   struct FIFO *next = FIFOQ->next;
+  //   deportQ->FIFOqueue = next;
+  //   deportQ->size--;
+  // }
+    
 
   // 将该包从队列中取出，并减少size
-  struct FIFO *FIFOQ = deportQ->FIFOqueue;
-  struct FIFO *next = FIFOQ->next;
-  deportQ->FIFOqueue = next;
+  if(!FIFOQ){
+    // 防御性处理：如果出现不一致，清理并返回错误
+    deportQ->size = 0;
+    release(&deportQ->portlock);
+    return -1;
+  }
+  // 出队
+  deportQ->FIFOqueue = FIFOQ->next;
+  deportQ->size -= 1;
+ 
+
+  char *packet = FIFOQ->packet;
+  if(!packet){
+    release(&deportQ->portlock);
+    kfree(FIFOQ); 
+    return -1;
+  }
+  
   
   release(&deportQ->portlock);
 
@@ -213,24 +247,41 @@ sys_recv(void)
 
   struct ip *ip = (struct ip*)(eth + 1);
   // recv() 复制 包的 32bit 源 IP 地址到 src 中
-  // 是否要转格式之后再说
   src = ntohl(ip->ip_src);
 
   // 并复制包的 16 bit UDP 源端口号到 sport，
   struct udp *udp = (struct udp*)(ip + 1);
-  // 是否要转格式之后再说
   sport = ntohs(udp->sport);
 
-  int len = udp->ulen - sizeof(*udp) > maxlen ? maxlen : udp->ulen - sizeof(*udp);
+
+  // copyout 源IP地址
+  if(copyout(p->pagetable, srcaddr, (char *)&src, sizeof(src)) < 0) {
+    printf("copyout src failed\n");
+    kfree(packet);
+    kfree(FIFOQ);
+    return -1;
+  }
+
+  // copyout 源端口
+  if(copyout(p->pagetable, sportaddr, (char *)&sport, sizeof(sport)) < 0) {
+    printf("copyout sport failed\n");
+    kfree(packet);
+    kfree(FIFOQ);
+    return -1;
+  }
+
+  int len = ntohs(udp->ulen) - sizeof(*udp) > maxlen ? maxlen : ntohs(udp->ulen) - sizeof(*udp);
   // 复制最多 maxlen 个 UDP payload 的字节数
   char *payload = (char *)(udp + 1);
   if(copyout(p->pagetable, bufaddr , payload, len) < 0){
-    printf("copy the maxlen byte from packet payload to bufaddr failed");
+    printf("copy the maxlen byte from packet payload to bufaddr failed\n");
+    kfree(packet);
+    kfree(FIFOQ);
     return -1;
   }
 
   // 正确释放包内存
-  kfree(FIFOQ->packet);
+  kfree(packet);
   kfree(FIFOQ);
 
   // 返回复制字节数的大小: 即 UDP length - UDP header
@@ -369,7 +420,8 @@ ip_rx(char *buf, int len)
   acquire(&dportQ->portlock);
   if(dportQ->binded != 1){
     release(&dportQ->portlock);
-    printf("port FIFO not binded");
+    printf("port FIFO not binded\n");
+    kfree(buf);
     return;
   }
 
@@ -384,13 +436,18 @@ ip_rx(char *buf, int len)
 
   // 如果 已经有 16 个包等待 recv() ，则一个即将到来的包将被丢弃
   if(dportQ->size == QueueSize){
-    printf("already have 16 in FIFO");
+    printf("already have 16 in FIFO\n");
     release(&dportQ->portlock);
     kfree(buf);
     return;
   }
 
   struct FIFO *new = (struct FIFO*)kalloc();
+  if(!new){
+    release(&dportQ->portlock);
+    kfree(buf);
+    return;
+  }
   new->packet = buf;
   new->next = 0;
 
@@ -405,10 +462,11 @@ ip_rx(char *buf, int len)
     }
     cur->next = new;
   }
-  release(&dportQ->portlock);
+  dportQ->size += 1;
+  printf("[ip_rx] got packet for port %ld (binded=%ld)\n", dport, PortQ[dport].binded);
 
-  // wakeup(dportQ);
-  
+  wakeup(PortQ[dport].chan);
+  release(&dportQ->portlock);
 }
 
 //
