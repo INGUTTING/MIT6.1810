@@ -66,6 +66,9 @@ void            ireclaim(int);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+int             sum(int);
+void            kfree_CPU(int, void *);
+void*           fetch_from_other_cpu(int);
 
 // log.c
 void            initlog(int, struct superblock*);
